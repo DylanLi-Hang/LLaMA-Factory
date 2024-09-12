@@ -326,6 +326,10 @@ class FinetuningArguments(FreezeArguments, LoraArguments, RLHFArguments, GaloreA
         default=False,
         metadata={"help": "Whether or not to make only the parameters in the expanded blocks trainable."},
     )
+    use_adam_mini: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to use the Adam-mini optimizer."},
+    )
     freeze_vision_tower: bool = field(
         default=True,
         metadata={"help": "Whether ot not to freeze vision tower in MLLM training."},
@@ -333,6 +337,10 @@ class FinetuningArguments(FreezeArguments, LoraArguments, RLHFArguments, GaloreA
     train_mm_proj_only: bool = field(
         default=False,
         metadata={"help": "Whether or not to train the multimodal projector for MLLM only."},
+    )
+    compute_accuracy: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to compute the token-level accuracy at evaluation."},
     )
     plot_loss: bool = field(
         default=False,
