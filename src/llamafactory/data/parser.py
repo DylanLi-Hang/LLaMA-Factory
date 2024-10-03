@@ -52,6 +52,7 @@ class DatasetAttr:
     prompt: Optional[str] = "instruction"
     query: Optional[str] = "input"
     response: Optional[str] = "output"
+    dataset_label: Optional[str] = None
     history: Optional[str] = None
     # sharegpt columns
     messages: Optional[str] = "conversations"
@@ -118,6 +119,8 @@ def get_dataset_list(dataset_names: Optional[Sequence[str]], dataset_dir: str) -
             dataset_attr = DatasetAttr("script", dataset_name=dataset_info[name]["script_url"])
         else:
             dataset_attr = DatasetAttr("file", dataset_name=dataset_info[name]["file_name"])
+            # print("loaded dataset_attr", dataset_attr)
+            # print(dataset_attr.dataset_label)
 
         dataset_attr.set_attr("formatting", dataset_info[name], default="alpaca")
         dataset_attr.set_attr("ranking", dataset_info[name], default=False)

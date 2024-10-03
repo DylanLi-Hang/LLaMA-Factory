@@ -80,6 +80,9 @@ def convert_alpaca(
     r"""
     Converts alpaca format dataset to the standard format.
     """
+    # print("example:", example)
+    # print("dataset_attr:", dataset_attr)
+    # print("dataset_attr.dataset_label:", dataset_attr.dataset_label)
     prompt = []
     if dataset_attr.history and isinstance(example[dataset_attr.history], list):
         for old_prompt, old_response in example[dataset_attr.history]:
@@ -93,8 +96,18 @@ def convert_alpaca(
     if dataset_attr.query and example[dataset_attr.query]:
         query.append(example[dataset_attr.query])
 
+    # print("query:", query)
+    
     prompt.append({"role": Role.USER.value, "content": "\n".join(query)})  # "prompt\nquery"
 
+    # print("prompt:", prompt)
+    
+    # if example[dataset_attr.dataset_label] and example[dataset_attr.dataset_label] != 0:
+    #     print("dataset_label", example[dataset_attr.dataset_label])
+    
+    # if (dataset_attr.dataset_label and isinstance(example[dataset_attr.dataset_label], int)):
+        # print("dataset_attr.dataset_label:", dataset_attr.dataset_label)
+    
     if dataset_attr.kto_tag and isinstance(example[dataset_attr.kto_tag], bool):  # kto example
         response = [{"role": Role.ASSISTANT.value, "content": example[dataset_attr.response]}]
         if example[dataset_attr.kto_tag]:
@@ -124,6 +137,7 @@ def convert_alpaca(
         "_tools": example[dataset_attr.tools] if dataset_attr.tools else "",
         "_images": convert_images(example[dataset_attr.images]) if dataset_attr.images else None,
         "_videos": convert_videos(example[dataset_attr.videos]) if dataset_attr.videos else None,
+        "_dataset_label": example[dataset_attr.dataset_label] if dataset_attr.dataset_label else 0,
     }
     return output
 
@@ -236,12 +250,16 @@ def align_dataset(
         _images: [],
         _videos: [],
     """
+    # print("dataset_attr.formatting:", dataset_attr.formatting)
+    # print("dataset:", dataset[0])
     if dataset_attr.formatting == "alpaca":
         convert_func = partial(convert_alpaca, dataset_attr=dataset_attr, data_args=data_args)
     else:
         convert_func = partial(convert_sharegpt, dataset_attr=dataset_attr, data_args=data_args)
 
     column_names = list(next(iter(dataset)).keys())
+    # print("column_names", column_names)
+
     kwargs = {}
     if not data_args.streaming:
         kwargs = dict(

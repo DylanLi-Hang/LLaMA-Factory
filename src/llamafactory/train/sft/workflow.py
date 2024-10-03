@@ -14,7 +14,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import torch
 from typing import TYPE_CHECKING, List, Optional
 
 from ...data import SFTDataCollatorWith4DAttentionMask, get_dataset, get_template_and_fix_tokenizer
@@ -33,6 +33,19 @@ if TYPE_CHECKING:
     from ...hparams import DataArguments, FinetuningArguments, GeneratingArguments, ModelArguments
 
 
+class CustomDataCollatorWithIndicator(SFTDataCollatorWith4DAttentionMask):
+    def __call__(self, features):
+        # Get the base batch
+        batch = super().__call__(features)
+
+        # Extract 'my_attribute' from each feature
+        dataset = [feature['dataset_label'] for feature in features]
+
+        # Include 'my_attribute' in the batch
+        batch['dataset_label'] = torch.tensor(dataset, dtype=torch.float32)
+
+        return batch
+
 def run_sft(
     model_args: "ModelArguments",
     data_args: "DataArguments",
@@ -50,6 +63,7 @@ def run_sft(
     if getattr(model, "is_quantized", False) and not training_args.do_train:
         setattr(model, "_hf_peft_config_loaded", True)  # hack here: make model compatible with prediction
 
+    # data_collator = SFTDataCollatorWith4DAttentionMask/CustomDataCollatorWithIndicator
     data_collator = SFTDataCollatorWith4DAttentionMask(
         template=template,
         pad_to_multiple_of=8 if training_args.do_train else None,  # for shift short attention

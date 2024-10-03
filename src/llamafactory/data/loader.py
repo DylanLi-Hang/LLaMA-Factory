@@ -114,7 +114,9 @@ def _load_single_dataset(
             streaming=(data_args.streaming and (dataset_attr.load_from != "file")),
             trust_remote_code=True,
         )
-
+        
+        # print("dataset:", dataset[0])
+        
     if data_args.streaming and (dataset_attr.load_from == "file"):  # faster than specifying streaming=True
         dataset = dataset.to_iterable_dataset()  # TODO: add num shards parameter
 
@@ -134,6 +136,7 @@ def _load_single_dataset(
         max_samples = min(data_args.max_samples, len(dataset))
         dataset = dataset.select(range(max_samples))
 
+    # print("dataset_type:", dataset_type)
     return align_dataset(dataset, dataset_attr, data_args, training_args)
 
 
@@ -170,6 +173,7 @@ def _get_preprocessed_dataset(
     processor: Optional["ProcessorMixin"] = None,
     is_eval: bool = False,
 ) -> Optional[Union["Dataset", "IterableDataset"]]:
+    # print("dataset:", dataset[0])
     r"""
     Preprocesses the dataset, including format checking and tokenization.
     """
@@ -180,6 +184,8 @@ def _get_preprocessed_dataset(
         data_args, stage, template, tokenizer, processor, do_generate=(training_args.predict_with_generate and is_eval)
     )
     column_names = list(next(iter(dataset)).keys())
+    # print("column_names:", column_names)
+    # print("dataset 0:", dataset[0])
     kwargs = {}
     if not data_args.streaming:
         kwargs = dict(
@@ -285,8 +291,8 @@ def get_dataset(
         dataset_module = {}
         if "train" in dataset_dict:
             dataset_module["train_dataset"] = dataset_dict["train"]
-
+            # print("dataset_module['train_dataset'] 0:", dataset_module["train_dataset"][0])
         if "validation" in dataset_dict:
             dataset_module["eval_dataset"] = dataset_dict["validation"]
-
+            # print("dataset_module['eval_dataset'] 0:", dataset_module["eval_dataset"][0])
         return dataset_module

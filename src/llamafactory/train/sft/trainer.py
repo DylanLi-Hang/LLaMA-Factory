@@ -17,6 +17,7 @@
 
 import json
 import os
+import torch.nn as nn
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -41,6 +42,43 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+def label_sm(model_output, labels, shift_labels=False):
+    epsilon: float = 0.1
+    ignore_index: int = -100
+
+    logits = model_output["logits"] if isinstance(model_output, dict) else model_output[0]
+    if shift_labels:
+        logits = logits[..., :-1, :].contiguous()
+        labels = labels[..., 1:].contiguous()
+
+    log_probs = -nn.functional.log_softmax(logits, dim=-1)
+    if labels.dim() == log_probs.dim() - 1:
+        labels = labels.unsqueeze(-1)
+
+    padding_mask = labels.eq(ignore_index)
+    labels = torch.clamp(labels, min=0)
+
+    nll_loss = log_probs.gather(dim=-1, index=labels).squeeze(-1)  # Shape: (batch_size, seq_length)
+    smoothed_loss = log_probs.sum(dim=-1, dtype=torch.float32)  # Shape: (batch_size, seq_length)
+
+    nll_loss.masked_fill_(padding_mask.squeeze(-1), 0.0)
+    smoothed_loss.masked_fill_(padding_mask.squeeze(-1), 0.0)
+
+    # Compute number of active tokens per sample
+    num_active_tokens_per_sample = (~padding_mask.squeeze(-1)).sum(dim=-1)  # Shape: (batch_size,)
+
+    # Avoid division by zero
+    num_active_tokens_per_sample = num_active_tokens_per_sample.clamp(min=1)
+
+    # Compute per-sample losses
+    nll_loss = nll_loss.sum(dim=-1) / num_active_tokens_per_sample  # Shape: (batch_size,)
+    smoothed_loss = smoothed_loss.sum(dim=-1) / (
+                num_active_tokens_per_sample * log_probs.shape[-1])  # Shape: (batch_size,)
+
+    # Compute final per-sample loss
+    loss = (1 - epsilon) * nll_loss + epsilon * smoothed_loss  # Shape: (batch_size,)
+
+    return loss
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     r"""
@@ -64,6 +102,112 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 
             self.accelerator.clip_grad_norm_ = MethodType(clip_grad_norm_old_version, self.accelerator)
             self.add_callback(BAdamCallback)
+
+    # @override
+    # def compute_loss(self, model, inputs, weight_ratio = 1e-4, return_outputs=False):
+    #     """
+    #     How the loss is computed by Trainer. By default, all models return the loss in the first element.
+
+    #     Subclass and override for custom behavior.
+    #     """
+    #     if self.label_smoother is not None and "labels" in inputs:
+    #         labels = inputs["labels"]
+    #     else:
+    #         labels = None
+
+    #     # Indicators 0/1 --> original/generated
+    #     indicators = inputs["dataset_label"]
+    #     # print("indicators:", indicators)
+    #     # print("labels:", labels)
+    #     # print("inputs:", inputs)
+
+    #     inputs = {k: v for k, v in inputs.items() if k != "dataset_label"}
+    #     outputs = model(**inputs)
+
+    #     if self.args.past_index >= 0:
+    #         self._past = outputs[self.args.past_index]
+
+    #     if labels is not None:
+    #         # unwrapped_model = self.accelerator.unwrap_model(model)
+    #         # if _is_peft_model(unwrapped_model):
+    #         #     model_name = unwrapped_model.base_model.model._get_name()
+    #         # else:
+    #         #     model_name = unwrapped_model._get_name()
+    #         # if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+    #         #     raw_loss = self.label_sm(outputs, labels, shift_labels=True)
+    #         #
+    #         # else:
+    #         #     raw_loss = self.label_sm(outputs, labels)
+    #         raw_loss = self.label_sm(outputs, labels, shift_labels=True)
+    #     else:
+    #         if isinstance(outputs, dict) and "loss" not in outputs:
+    #             raise ValueError(
+    #                 "The model did not return a loss from the inputs, only the following keys: "
+    #                 f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+    #             )
+    #         # We don't use .loss here since the model may return tuples instead of ModelOutput.
+    #         raw_loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+    #     # Apply reweighting
+    #     print("raw loss:", raw_loss)
+    #     print("indicators:", indicators)
+    #     print("raw loss shape:", raw_loss.shape)
+    #     print("indicators shape:", indicators.shape)
+    #     weights = torch.ones_like(raw_loss)
+    #     weights[indicators == 1] = weight_ratio
+    #     reweighted_loss = raw_loss * weights
+
+    #     loss = reweighted_loss.sum()
+
+    #     return (loss, outputs) if return_outputs else loss
+
+    @override
+    def compute_loss(self, model, inputs, weight_ratio = 1e-4, return_outputs=False):
+        """
+        Custom loss computation to apply different loss weights based on dataset type.
+        """
+        # Extract the labels and the dataset identifier
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+            
+        dataset_ids = inputs.pop("dataset_label")  # Assuming 'dataset' is passed in inputs as a tensor
+
+        # Forward pass through the model
+        outputs = model(**inputs)
+
+        # Save past state if needed (this part remains unchanged)
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        # Compute loss for dataset 1 and dataset 0 separately
+        if labels is not None:
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if _is_peft_model(unwrapped_model):
+                model_name = unwrapped_model.base_model.model._get_name()
+            else:
+                model_name = unwrapped_model._get_name()
+            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                loss = self.label_smoother(outputs, labels, shift_labels=True)
+            else:
+                loss = self.label_smoother(outputs, labels)
+        else:
+            if isinstance(outputs, dict) and "loss" not in outputs:
+                raise ValueError(
+                    "The model did not return a loss from the inputs, only the following keys: "
+                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+                )
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        # Apply different weights
+        dataset_weights = torch.where(dataset_ids == 1, weight_ratio, 1.0)  # weight ratio dataset 1
+        weighted_loss = loss * dataset_weights
+
+        final_loss = weighted_loss.mean() # Compute the final mean loss across the batch
+
+        return (final_loss, outputs) if return_outputs else final_loss
 
     @override
     def create_optimizer(self) -> "torch.optim.Optimizer":
