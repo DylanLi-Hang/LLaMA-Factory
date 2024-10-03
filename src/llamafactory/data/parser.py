@@ -52,6 +52,7 @@ class DatasetAttr:
     prompt: Optional[str] = "instruction"
     query: Optional[str] = "input"
     response: Optional[str] = "output"
+    dataset_label: Optional[str] = None
     history: Optional[str] = None
     # sharegpt columns
     messages: Optional[str] = "conversations"

@@ -77,6 +77,54 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     ) -> "torch.optim.lr_scheduler.LRScheduler":
         create_custom_scheduler(self.args, num_training_steps, optimizer)
         return super().create_scheduler(num_training_steps, optimizer)
+    
+    @override
+    def compute_loss(self, model, inputs, weight_ratio = 1e-4, return_outputs=False):
+        """
+        Custom loss computation to apply different loss weights based on dataset type.
+        """
+        # Extract the labels and the dataset identifier
+        if self.label_smoother is not None and "labels" in inputs:
+            labels = inputs.pop("labels")
+        else:
+            labels = None
+            
+        dataset_ids = inputs.pop("dataset_label")  # Assuming 'dataset' is passed in inputs as a tensor
+
+        # Forward pass through the model
+        outputs = model(**inputs)
+
+        # Save past state if needed (this part remains unchanged)
+        if self.args.past_index >= 0:
+            self._past = outputs[self.args.past_index]
+
+        # Compute loss for dataset 1 and dataset 0 separately
+        if labels is not None:
+            unwrapped_model = self.accelerator.unwrap_model(model)
+            if _is_peft_model(unwrapped_model):
+                model_name = unwrapped_model.base_model.model._get_name()
+            else:
+                model_name = unwrapped_model._get_name()
+            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
+                loss = self.label_smoother(outputs, labels, shift_labels=True)
+            else:
+                loss = self.label_smoother(outputs, labels)
+        else:
+            if isinstance(outputs, dict) and "loss" not in outputs:
+                raise ValueError(
+                    "The model did not return a loss from the inputs, only the following keys: "
+                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
+                )
+            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
+
+        # Apply different weights
+        dataset_weights = torch.where(dataset_ids == 1, weight_ratio, 1.0)  # weight ratio dataset 1
+        weighted_loss = loss * dataset_weights
+
+        final_loss = weighted_loss.mean() # Compute the final mean loss across the batch
+
+        return (final_loss, outputs) if return_outputs else final_loss
 
     @override
     def prediction_step(
