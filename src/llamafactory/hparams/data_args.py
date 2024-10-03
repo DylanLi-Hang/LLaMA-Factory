@@ -97,6 +97,10 @@ class DataArguments:
         default=0.0,
         metadata={"help": "Size of the development set, should be an integer or a float in range `[0,1)`."},
     )
+    weight_ratio: Optional[float] = field(
+        default=1.0,
+        metadata={"help": "Weight ratio to use for training."},
+    )
     packing: Optional[bool] = field(
         default=None,
         metadata={"help": "Enable sequences packing in training. Will automatically enable in pre-training."},

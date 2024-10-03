@@ -78,12 +78,15 @@ def run_sft(
         model=model,
         args=training_args,
         finetuning_args=finetuning_args,
+        training_weight_ratio=data_args.weight_ratio,
         data_collator=data_collator,
         callbacks=callbacks,
         **dataset_module,
         **tokenizer_module,
         **metric_module,
     )
+    
+    print("training_weight_ratio:", trainer.training_weight_ratio)
 
     # Keyword arguments for `model.generate`
     gen_kwargs = generating_args.to_dict()

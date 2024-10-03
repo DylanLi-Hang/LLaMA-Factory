@@ -48,9 +48,10 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     """
 
     def __init__(
-        self, finetuning_args: "FinetuningArguments", processor: Optional["ProcessorMixin"], **kwargs
+        self, finetuning_args: "FinetuningArguments", processor: Optional["ProcessorMixin"], training_weight_ratio: Optional[float] = 1.0, **kwargs
     ) -> None:
         super().__init__(**kwargs)
+        self.training_weight_ratio = training_weight_ratio
         self.finetuning_args = finetuning_args
 
         if processor is not None:
@@ -79,7 +80,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         return super().create_scheduler(num_training_steps, optimizer)
     
     @override
-    def compute_loss(self, model, inputs, weight_ratio = 1e-4, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False):
         """
         Custom loss computation to apply different loss weights based on dataset type.
         """
@@ -119,7 +120,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
 
         # Apply different weights
-        dataset_weights = torch.where(dataset_ids == 1, weight_ratio, 1.0)  # weight ratio dataset 1
+        dataset_weights = torch.where(dataset_ids == 1, self.training_weight_ratio, 1.0)  # weight ratio for dataset 1
         weighted_loss = loss * dataset_weights
 
         final_loss = weighted_loss.mean() # Compute the final mean loss across the batch
