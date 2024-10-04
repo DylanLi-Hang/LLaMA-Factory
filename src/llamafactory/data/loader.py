@@ -47,6 +47,7 @@ def _load_single_dataset(
     model_args: "ModelArguments",
     data_args: "DataArguments",
     training_args: "Seq2SeqTrainingArguments",
+    is_eval: bool = False,
 ) -> Union["Dataset", "IterableDataset"]:
     r"""
     Loads a single dataset and aligns it to the standard format.
@@ -134,7 +135,7 @@ def _load_single_dataset(
         max_samples = min(data_args.max_samples, len(dataset))
         dataset = dataset.select(range(max_samples))
 
-    return align_dataset(dataset, dataset_attr, data_args, training_args)
+    return align_dataset(dataset, dataset_attr, data_args, training_args, is_eval)
 
 
 def _get_merged_dataset(
@@ -143,6 +144,7 @@ def _get_merged_dataset(
     data_args: "DataArguments",
     training_args: "Seq2SeqTrainingArguments",
     stage: Literal["pt", "sft", "rm", "ppo", "kto"],
+    is_eval: bool = False,
 ) -> Optional[Union["Dataset", "IterableDataset"]]:
     r"""
     Gets the merged datasets in the standard format.
@@ -155,7 +157,7 @@ def _get_merged_dataset(
         if (stage == "rm" and dataset_attr.ranking is False) or (stage != "rm" and dataset_attr.ranking is True):
             raise ValueError("The dataset is not applicable in the current training stage.")
 
-        datasets.append(_load_single_dataset(dataset_attr, model_args, data_args, training_args))
+        datasets.append(_load_single_dataset(dataset_attr, model_args, data_args, training_args, is_eval))
 
     return merge_dataset(datasets, data_args, seed=training_args.seed)
 
@@ -245,8 +247,8 @@ def get_dataset(
 
     # Load and preprocess dataset
     with training_args.main_process_first(desc="load dataset"):
-        dataset = _get_merged_dataset(data_args.dataset, model_args, data_args, training_args, stage)
-        eval_dataset = _get_merged_dataset(data_args.eval_dataset, model_args, data_args, training_args, stage)
+        dataset = _get_merged_dataset(data_args.dataset, model_args, data_args, training_args, stage, is_eval=False)
+        eval_dataset = _get_merged_dataset(data_args.eval_dataset, model_args, data_args, training_args, stage, is_eval=True)
 
     with training_args.main_process_first(desc="pre-process dataset"):
         dataset = _get_preprocessed_dataset(
@@ -255,6 +257,8 @@ def get_dataset(
         eval_dataset = _get_preprocessed_dataset(
             eval_dataset, data_args, training_args, stage, template, tokenizer, processor, is_eval=True
         )
+        print('preprocessed_dataset: ', dataset)
+        print('preprocessed_eval_dataset: ', eval_dataset)
 
         if data_args.val_size > 1e-6:
             dataset_dict = split_dataset(dataset, data_args, seed=training_args.seed)

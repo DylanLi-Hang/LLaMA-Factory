@@ -121,7 +121,7 @@ def preprocess_supervised_dataset(
         model_inputs["labels"].append(labels)
         model_inputs["images"].append(examples["_images"][i])
         model_inputs["videos"].append(examples["_videos"][i])
-        model_inputs["dataset_label"].append(examples["dataset_label"][i] if "dataset_label" in examples else 0)
+        model_inputs["dataset_label"].append(examples["_dataset_label"][i] if "_dataset_label" in examples else 0)
 
     return model_inputs
 

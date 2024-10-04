@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from torch.nn import CrossEntropyLoss
 from transformers import Seq2SeqTrainer
 from typing_extensions import override
 
@@ -78,54 +79,71 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     ) -> "torch.optim.lr_scheduler.LRScheduler":
         create_custom_scheduler(self.args, num_training_steps, optimizer)
         return super().create_scheduler(num_training_steps, optimizer)
-    
+
     @override
     def compute_loss(self, model, inputs, return_outputs=False):
         """
         Custom loss computation to apply different loss weights based on dataset type.
         """
-        # Extract the labels and the dataset identifier
-        if self.label_smoother is not None and "labels" in inputs:
-            labels = inputs.pop("labels")
-        else:
-            labels = None
-            
-        dataset_ids = inputs.pop("dataset_label")  # Assuming 'dataset' is passed in inputs as a tensor
+        labels = inputs.get("labels")
+        dataset_ids = inputs.pop("dataset_label")  # Assuming 'dataset_label' is passed in inputs as a tensor
 
-        # Forward pass through the model
         outputs = model(**inputs)
 
-        # Save past state if needed (this part remains unchanged)
-        if self.args.past_index >= 0:
-            self._past = outputs[self.args.past_index]
+        # print("Original loss: ", outputs.get("loss"))
 
-        # Compute loss for dataset 1 and dataset 0 separately
+        logits = outputs.get("logits")
+
+        # Loss calculation
+        loss = None
         if labels is not None:
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            if _is_peft_model(unwrapped_model):
-                model_name = unwrapped_model.base_model.model._get_name()
-            else:
-                model_name = unwrapped_model._get_name()
-            if model_name in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.values():
-                loss = self.label_smoother(outputs, labels, shift_labels=True)
-            else:
-                loss = self.label_smoother(outputs, labels)
+            # Shift so that tokens < n predict n
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            
+            # Loss function
+            # loss_fct = CrossEntropyLoss(reduction='mean')
+            loss_fct_per_sample = CrossEntropyLoss(reduction='none')
+            
+            # Flatten the tokens
+            shift_logits = shift_logits.view(-1, model.config.vocab_size)
+            shift_labels = shift_labels.view(-1)
+
+            # Enable model parallelism
+            shift_labels = shift_labels.to(shift_logits.device)
+            # loss = loss_fct(shift_logits, shift_labels)
+            loss_per_sample = loss_fct_per_sample(shift_logits, shift_labels)
+            
+            # Original Loss Calculation
+            # total_loss = loss_per_sample.sum()
+            # num_elements = (shift_labels != -100).sum()
+            # custom_mean_loss = total_loss / num_elements
+            
+            # Create weight tensor based on dataset_ids
+            weight_ratio = self.training_weight_ratio
+            sample_weights = torch.where(dataset_ids == 1, torch.tensor(weight_ratio), torch.tensor(1.0)).to(shift_labels.device)
+            
+            # Expand sample_weights to match the number of tokens in each sample
+            weights = sample_weights.unsqueeze(1).expand(-1, shift_labels.size(0) // dataset_ids.size(0)).reshape(-1)
+            
+            # Apply weights to loss_per_sample
+            weighted_loss_per_sample = loss_per_sample * weights
+            
+            # Calculate mean loss, ignoring padding tokens
+            non_ignored = shift_labels != -100
+            total_loss = (weighted_loss_per_sample * non_ignored).sum()
+            num_elements = non_ignored.sum()
+            custom_mean_loss = total_loss / num_elements
+            
+            # print("weighted_custom_mean_loss: ", custom_mean_loss)
+            loss = custom_mean_loss
+            # print("weighted_custom_mean_loss: ", loss)
+            # print("Original loss: ", outputs["loss"])
         else:
-            if isinstance(outputs, dict) and "loss" not in outputs:
-                raise ValueError(
-                    "The model did not return a loss from the inputs, only the following keys: "
-                    f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
-                )
-            # We don't use .loss here since the model may return tuples instead of ModelOutput.
-            loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
-
-        # Apply different weights
-        dataset_weights = torch.where(dataset_ids == 1, self.training_weight_ratio, 1.0)  # weight ratio for dataset 1
-        weighted_loss = loss * dataset_weights
-
-        final_loss = weighted_loss.mean() # Compute the final mean loss across the batch
-
-        return (final_loss, outputs) if return_outputs else final_loss
+            if self.training_weight_ratio != 1.0:
+                print("Weight Ratio is Set but no labels provided, using original loss")
+            loss = outputs["loss"]
+        return (loss, outputs) if return_outputs else loss
 
     @override
     def prediction_step(

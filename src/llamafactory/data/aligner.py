@@ -227,6 +227,7 @@ def align_dataset(
     dataset_attr: "DatasetAttr",
     data_args: "DataArguments",
     training_args: "Seq2SeqTrainingArguments",
+    is_eval: bool = False,
 ) -> Union["Dataset", "IterableDataset"]:
     r"""
     Aligned dataset:
