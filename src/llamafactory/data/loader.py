@@ -250,6 +250,9 @@ def get_dataset(
         dataset = _get_merged_dataset(data_args.dataset, model_args, data_args, training_args, stage, is_eval=False)
         eval_dataset = _get_merged_dataset(data_args.eval_dataset, model_args, data_args, training_args, stage, is_eval=True)
 
+        print("dataset: ", dataset)
+        print("eval_dataset: ", eval_dataset)
+        
     with training_args.main_process_first(desc="pre-process dataset"):
         dataset = _get_preprocessed_dataset(
             dataset, data_args, training_args, stage, template, tokenizer, processor, is_eval=False

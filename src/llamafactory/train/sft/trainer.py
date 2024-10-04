@@ -87,7 +87,8 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         """
         labels = inputs.get("labels")
         dataset_ids = inputs.pop("dataset_label")  # Assuming 'dataset_label' is passed in inputs as a tensor
-
+        # print("dataset_ids: ", dataset_ids)
+        
         outputs = model(**inputs)
 
         # print("Original loss: ", outputs.get("loss"))
@@ -137,12 +138,13 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             
             # print("weighted_custom_mean_loss: ", custom_mean_loss)
             loss = custom_mean_loss
-            # print("weighted_custom_mean_loss: ", loss)
-            # print("Original loss: ", outputs["loss"])
+            print("Original loss: ", outputs["loss"])
+            print("weighted_custom_mean_loss: ", loss)
         else:
             if self.training_weight_ratio != 1.0:
                 print("Weight Ratio is Set but no labels provided, using original loss")
             loss = outputs["loss"]
+        # print('final loss: ', loss)
         return (loss, outputs) if return_outputs else loss
 
     @override
