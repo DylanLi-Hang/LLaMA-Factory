@@ -115,6 +115,9 @@ def _load_single_dataset(
             streaming=(data_args.streaming and (dataset_attr.load_from != "file")),
             trust_remote_code=True,
         )
+    
+    if 'dataset_label' in dataset[0].keys():
+        dataset_attr.dataset_label = 'dataset_label'
 
     if data_args.streaming and (dataset_attr.load_from == "file"):  # faster than specifying streaming=True
         dataset = dataset.to_iterable_dataset()  # TODO: add num shards parameter
