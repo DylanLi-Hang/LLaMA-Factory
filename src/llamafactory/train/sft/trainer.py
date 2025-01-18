@@ -86,63 +86,67 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         Custom loss computation to apply different loss weights based on dataset type.
         """
         labels = inputs.get("labels")
-        dataset_ids = inputs.pop("dataset_label")  # Assuming 'dataset_label' is passed in inputs as a tensor
+        if "dataset_label" not in inputs:
+            print("Warning: 'dataset_label' not found in inputs. Defaulting to equal weights.")
+            dataset_ids = torch.zeros(labels.size(0), device=labels.device, dtype=torch.long)
+        else:
+            dataset_ids = inputs.pop("dataset_label")  # Assuming 'dataset_label' is passed in inputs as a tensor
 
         outputs = model(**inputs)
-
-        # print("Original loss: ", outputs.get("loss"))
-
         logits = outputs.get("logits")
 
         # Loss calculation
         loss = None
         if labels is not None:
-            # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            
-            # Loss function
-            # loss_fct = CrossEntropyLoss(reduction='mean')
-            loss_fct_per_sample = CrossEntropyLoss(reduction='none')
-            
+
             # Flatten the tokens
             shift_logits = shift_logits.view(-1, model.config.vocab_size)
             shift_labels = shift_labels.view(-1)
-
-            # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
-            # loss = loss_fct(shift_logits, shift_labels)
+
+            # Compute token-level loss
+            loss_fct_per_sample = CrossEntropyLoss(reduction='none')
             loss_per_sample = loss_fct_per_sample(shift_logits, shift_labels)
-            
-            # Original Loss Calculation
-            # total_loss = loss_per_sample.sum()
-            # num_elements = (shift_labels != -100).sum()
-            # custom_mean_loss = total_loss / num_elements
-            
-            # Create weight tensor based on dataset_ids
-            weight_ratio = self.training_weight_ratio
-            sample_weights = torch.where(dataset_ids == 1, torch.tensor(weight_ratio), torch.tensor(1.0)).to(shift_labels.device)
-            
-            # Expand sample_weights to match the number of tokens in each sample
-            weights = sample_weights.unsqueeze(1).expand(-1, shift_labels.size(0) // dataset_ids.size(0)).reshape(-1)
-            
-            # Apply weights to loss_per_sample
-            weighted_loss_per_sample = loss_per_sample * weights
-            
-            # Calculate mean loss, ignoring padding tokens
+
+            # Handle padding tokens
             non_ignored = shift_labels != -100
-            total_loss = (weighted_loss_per_sample * non_ignored).sum()
-            num_elements = non_ignored.sum()
-            custom_mean_loss = total_loss / num_elements
-            
-            # print("weighted_custom_mean_loss: ", custom_mean_loss)
+            loss_per_sample = loss_per_sample * non_ignored
+
+            # Expand dataset_ids to token level
+            seq_len = shift_labels.size(0) // dataset_ids.size(0)
+            if shift_labels.size(0) % dataset_ids.size(0) != 0:
+                raise ValueError("shift_labels size must be divisible by dataset_ids size.")
+            token_level_dataset_ids = dataset_ids.unsqueeze(1).expand(-1, seq_len).reshape(-1)
+
+            # Compute weights
+            weight_ratio = torch.tensor(self.training_weight_ratio, device=shift_labels.device)
+            sample_weights = torch.where(token_level_dataset_ids == 1, weight_ratio, torch.tensor(1.0, device=shift_labels.device))
+
+            # Apply weights to loss
+            weighted_loss_per_sample = loss_per_sample * sample_weights
+
+            # **Print summarized debugging information**
+            # print("\nDebugging Information:")
+            # print(f"Weight ratio applied: {self.training_weight_ratio}")
+            # print(f"Dataset IDs (label == 1): {dataset_ids[dataset_ids == 1].size(0)} samples")
+            # print(f"Dataset IDs (label == 0): {dataset_ids[dataset_ids == 0].size(0)} samples")
+            # if dataset_ids[dataset_ids == 1].size(0) > 0:
+            #     print(f"Loss per sample (label == 1): Mean={loss_per_sample[token_level_dataset_ids == 1].mean().item():.4f}, Std={loss_per_sample[token_level_dataset_ids == 1].std().item():.4f}")
+            # else:
+            #     print("Loss per sample (label == 1): No samples")
+            # print(f"Loss per sample (label == 0): Mean={loss_per_sample[token_level_dataset_ids == 0].mean().item():.4f}, Std={loss_per_sample[token_level_dataset_ids == 0].std().item():.4f}")
+
+            # Compute custom mean loss
+            custom_mean_loss = weighted_loss_per_sample.sum() / non_ignored.sum()
+            print(f"Custom Mean Loss: {custom_mean_loss.item():.4f}")
             loss = custom_mean_loss
-            # print("weighted_custom_mean_loss: ", loss)
-            # print("Original loss: ", outputs["loss"])
         else:
             if self.training_weight_ratio != 1.0:
                 print("Weight Ratio is Set but no labels provided, using original loss")
             loss = outputs["loss"]
+
         return (loss, outputs) if return_outputs else loss
 
     @override

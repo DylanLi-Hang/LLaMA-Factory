@@ -26,7 +26,8 @@ from ..trainer_utils import create_modelcard_and_push
 from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor
 from .trainer import CustomSeq2SeqTrainer
 
-
+import copy
+import json
 if TYPE_CHECKING:
     from transformers import Seq2SeqTrainingArguments, TrainerCallback
 
@@ -41,15 +42,22 @@ def run_sft(
     generating_args: "GeneratingArguments",
     callbacks: Optional[List["TrainerCallback"]] = None,
 ):
+    
+    #print("data_args:", data_args)
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
     dataset_module = get_dataset(template, model_args, data_args, training_args, stage="sft", **tokenizer_module)
+    #if not training_args.do_predict:  # 在 do predict 的时候不需要加载模型
     model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)
 
     if getattr(model, "is_quantized", False) and not training_args.do_train:
         setattr(model, "_hf_peft_config_loaded", True)  # hack here: make model compatible with prediction
 
+    #print("model_args:", model_args)
+
+    # print('\n')
+    #print(f'fine_tuning_args: {finetuning_args}')
     data_collator = SFTDataCollatorWith4DAttentionMask(
         template=template,
         pad_to_multiple_of=8 if training_args.do_train else None,  # for shift short attention
@@ -72,8 +80,8 @@ def run_sft(
     elif finetuning_args.compute_accuracy:
         metric_module["compute_metrics"] = ComputeAccuracy()
         metric_module["preprocess_logits_for_metrics"] = eval_logit_processor
-
-    # Initialize our Trainer
+    #if not training_args.do_predict: # 在 do predict 的时候不需要加载模型
+        # Initialize our Trainer
     trainer = CustomSeq2SeqTrainer(
         model=model,
         args=training_args,
@@ -117,12 +125,76 @@ def run_sft(
 
     # Predict
     if training_args.do_predict:
-        predict_results = trainer.predict(dataset_module["eval_dataset"], metric_key_prefix="predict", **gen_kwargs)
-        if training_args.predict_with_generate:  # predict_loss will be wrong if predict_with_generate is enabled
-            predict_results.metrics.pop("predict_loss", None)
-        trainer.log_metrics("predict", predict_results.metrics)
-        trainer.save_metrics("predict", predict_results.metrics)
-        trainer.save_predictions(dataset_module["eval_dataset"], predict_results)
+        # Step 1: 加载基础模型
+        print(f' Start to load the Base model')
+        base_model_args = copy.deepcopy(model_args)
+        base_model_args.adapter_name_or_path = None  # 只load base model
+        base_model = load_model(tokenizer, base_model_args, finetuning_args, is_trainable=False)
+        print(f' Base Model loaded successfully')
+        base_trainer = CustomSeq2SeqTrainer(
+            model=base_model,
+            args=training_args,
+            finetuning_args=finetuning_args,
+            training_weight_ratio=data_args.weight_ratio,
+            data_collator=data_collator,
+            callbacks=callbacks,
+            **dataset_module,
+            **tokenizer_module,
+            **metric_module,
+        )
+        base_predict_results = base_trainer.predict(dataset_module["eval_dataset"], metric_key_prefix="base_predict", **gen_kwargs)
+        base_predictions = base_predict_results.predictions  # 拿到这些index
+        print(f' Base model predictions obtained')
+
+        # Step 2: 根据基础模型的预测结果分组输入数据
+        grouped_inputs = {}
+        for i, input_data in enumerate(dataset_module["eval_dataset"]):
+            adapter_index = int(base_predictions[i])  # 根据基础模型的预测结果确定适配器索引
+            if adapter_index not in grouped_inputs:
+                grouped_inputs[adapter_index] = []
+            grouped_inputs[adapter_index].append((i, input_data))  # 保存原始索引和输入数据
+
+        # 打印每个类别的数量和总数量
+        total_count = 0
+        for adapter_index, inputs in grouped_inputs.items():
+            count = len(inputs)
+            total_count += count
+            print(f'Adapter index {adapter_index} has {count} prompts.')
+        print(f'Total number of prompts: {total_count}')
+
+        # Step 3: 对每个分组加载对应的适配器并进行预测
+        final_predictions = [None] * len(dataset_module["eval_dataset"])  # 初始化最终预测结果列表
+        for adapter_index, inputs in grouped_inputs.items():
+            lora_model_args = copy.deepcopy(model_args)
+            lora_model_args.adapter_name_or_path = model_args.adapter_name_or_path[:adapter_index]
+            print(f'Evaluatuion with adapter_index: {adapter_index}. \n')
+            print(f'LoRA Adapeters args: {lora_model_args.adapter_name_or_path}')
+            model_with_adapter = load_model(tokenizer, lora_model_args, finetuning_args, is_trainable=False)
+            adapter_trainer = CustomSeq2SeqTrainer(
+                model=model_with_adapter,
+                args=training_args,
+                finetuning_args=finetuning_args,
+                training_weight_ratio=data_args.weight_ratio,
+                data_collator=data_collator,
+                callbacks=callbacks,
+                **dataset_module,
+                **tokenizer_module,
+                **metric_module,
+            )
+            input_dataset = [input_data for _, input_data in inputs]  # 提取输入数据
+            predict_results = adapter_trainer.predict(input_dataset, metric_key_prefix=f"predict_{adapter_index}", **gen_kwargs)
+            for (original_index, _), prediction in zip(inputs, predict_results.predictions):
+                final_predictions[original_index] = prediction  # 按原始顺序保存预测结果
+
+        # Step 4: 保存最终预测结果
+        with open(f"{training_args.output_dir}/final_predictions.json", "w") as f:
+            json.dump(final_predictions, f)
+
+        # Step 5: 记录和保存最终预测结果的指标
+        final_metrics = {"final_predictions": final_predictions}
+        trainer.log_metrics("final_predict", final_metrics)
+        trainer.save_metrics("final_predict", final_metrics)
+        trainer.save_predictions(dataset_module["eval_dataset"], final_predictions)
 
     # Create model card
     create_modelcard_and_push(trainer, model_args, data_args, training_args, finetuning_args)

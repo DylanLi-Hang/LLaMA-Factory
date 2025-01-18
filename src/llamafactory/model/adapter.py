@@ -176,7 +176,7 @@ def _setup_lora_tuning(
             "revision": model_args.model_revision,
             "token": model_args.hf_hub_token,
         }
-
+        print(f'adapter_to_merge: {adapter_to_merge}')
         for adapter in adapter_to_merge:
             model: "LoraModel" = PeftModel.from_pretrained(model, adapter, **init_kwargs)
             model = model.merge_and_unload()

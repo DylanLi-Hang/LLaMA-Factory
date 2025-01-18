@@ -124,8 +124,13 @@ def convert_alpaca(
         "_tools": example[dataset_attr.tools] if dataset_attr.tools else "",
         "_images": convert_images(example[dataset_attr.images]) if dataset_attr.images else None,
         "_videos": convert_videos(example[dataset_attr.videos]) if dataset_attr.videos else None,
-        "_dataset_label": example[dataset_attr.dataset_label] if dataset_attr.dataset_label else 0,
     }
+    if dataset_attr.dataset_label:
+        if dataset_attr.dataset_label in example:
+            output["_dataset_label"] = example[dataset_attr.dataset_label]
+        # else:
+        #     print(f"Warning: Key '{dataset_attr.dataset_label}' not found in example.")
+
     return output
 
 
@@ -238,6 +243,9 @@ def align_dataset(
         _images: [],
         _videos: [],
     """
+    if is_eval == False and data_args.weight_ratio != 1.0:
+        dataset_attr.dataset_label = "dataset_label"
+    
     if dataset_attr.formatting == "alpaca":
         convert_func = partial(convert_alpaca, dataset_attr=dataset_attr, data_args=data_args)
     else:
