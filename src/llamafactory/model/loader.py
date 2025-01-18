@@ -133,29 +133,29 @@ def load_model(
 
     model = None
     lazy_load = False
-    if model_args.use_unsloth:
+    if model_args.use_unsloth: # Not execute
         if model_args.adapter_name_or_path is not None:
             lazy_load = True
         elif is_trainable:
             model = load_unsloth_pretrained_model(config, model_args)
 
-    if model is None and not lazy_load:
+    if model is None and not lazy_load: 
         init_kwargs["config"] = config
         init_kwargs["pretrained_model_name_or_path"] = model_args.model_name_or_path
 
-        if model_args.mixture_of_depths == "load":
+        if model_args.mixture_of_depths == "load": # Not execute
             model = load_mod_pretrained_model(**init_kwargs)
         else:
             if type(config) in AutoModelForVision2Seq._model_mapping.keys():  # assume built-in models
                 load_class = AutoModelForVision2Seq
             else:
                 load_class = AutoModelForCausalLM
-            if model_args.train_from_scratch:
+            if model_args.train_from_scratch: # Not execute
                 model = load_class.from_config(config)
             else:
-                model = load_class.from_pretrained(**init_kwargs)
+                model = load_class.from_pretrained(**init_kwargs) #如果没有 Adapter，则执行这个，load the base
 
-        if model_args.mixture_of_depths == "convert":
+        if model_args.mixture_of_depths == "convert": # Not execute
             model = convert_pretrained_model_to_mod(model, config, model_args)
 
     if not lazy_load:
@@ -163,7 +163,7 @@ def load_model(
         register_autoclass(config, model, tokenizer)
 
     model = init_adapter(config, model, model_args, finetuning_args, is_trainable)
-
+    print(f'model_args: {model_args}')
     if add_valuehead:
         model = AutoModelForCausalLMWithValueHead.from_pretrained(model)
         patch_valuehead_model(model)

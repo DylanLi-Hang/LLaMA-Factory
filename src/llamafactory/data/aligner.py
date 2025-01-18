@@ -126,7 +126,11 @@ def convert_alpaca(
         "_videos": convert_videos(example[dataset_attr.videos]) if dataset_attr.videos else None,
     }
     if dataset_attr.dataset_label:
-        output["_dataset_label"] = example[dataset_attr.dataset_label]
+        if dataset_attr.dataset_label in example:
+            output["_dataset_label"] = example[dataset_attr.dataset_label]
+        # else:
+        #     print(f"Warning: Key '{dataset_attr.dataset_label}' not found in example.")
+
     return output
 
 
