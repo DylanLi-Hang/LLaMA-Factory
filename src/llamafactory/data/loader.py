@@ -27,7 +27,7 @@ from .aligner import align_dataset
 from .data_utils import merge_dataset, split_dataset
 from .parser import get_dataset_list
 from .preprocess import get_preprocess_and_print_func
-
+from llama import Dialog, Llama
 
 if TYPE_CHECKING:
     from datasets import Dataset, IterableDataset
@@ -180,11 +180,37 @@ def _get_preprocessed_dataset(
     """
     if dataset is None:
         return None
+    if training_args.predict_with_generate and is_eval:
+        if data_args.dynamic_eval and stage == "sft":
+            print(f'Load base selector model')
+            selector_model = _load_modelevaluate_adapter_index()
+            print(f'Load base selector model Successfully')
+            
+            def add_adapter_index_to_dataset(dataset, selector_model):
+                import time
+                adapter_indexs = []
+                start_time = time.time()
+                for i in range(len(dataset["_prompt"])):
+                    s_t = time.time()
+                    adapter_index = evaluate_adapter_index(selector_model, dataset["_prompt"][i])
+                    adapter_indexs.append(adapter_index)
+                    e_t = time.time()
+                    print(f"Processing example {i + 1}/{len(dataset)}, Adapter Index: {adapter_index}, Process time is : {e_t - s_t:.2f} seconds")
+                    #check_and_print_devices(dataset["_prompt"][i], adapter_index)
+                print(f'len of the adapter indexs added: {len(adapter_indexs)}')
+                dataset = dataset.add_column("_adapter_index", adapter_indexs)
+                end_time = time.time()
+                print(f"Dynamic adapter index computation completed in {end_time - start_time:.2f} seconds")
+                print(f'Added dataset: {dataset}')
+                return dataset
+
+            print("Processing dynamic eval dataset with for loop...")
+            dataset = add_adapter_index_to_dataset(dataset, selector_model)
 
     preprocess_func, print_function = get_preprocess_and_print_func(
         data_args, stage, template, tokenizer, processor, do_generate=(training_args.predict_with_generate and is_eval)
     )
-    column_names = list(next(iter(dataset)).keys())
+    
     kwargs = {}
     if not data_args.streaming:
         kwargs = dict(
@@ -193,15 +219,22 @@ def _get_preprocessed_dataset(
             desc="Running tokenizer on dataset",
         )
 
-    dataset = dataset.map(
-        preprocess_func,
-        batched=True,
-        batch_size=data_args.preprocessing_batch_size,
-        remove_columns=column_names,
-        **kwargs,
-    )
+    column_names = list(next(iter(dataset)).keys())
+    print(f'column_names: {column_names}')
 
-    if training_args.should_log:
+    try:
+        dataset = dataset.map(
+            preprocess_func,
+            batched=True,
+            batch_size=data_args.preprocessing_batch_size,  
+            remove_columns=column_names,
+            **kwargs,
+        )
+    except Exception as e:
+        print(f"Error during dataset.map: {e}")
+        raise
+    
+    if training_args.should_log and not data_args.dynamic_eval :
         try:
             print("eval example:" if is_eval else "training example:")
             print_function(next(iter(dataset)))
@@ -212,6 +245,7 @@ def _get_preprocessed_dataset(
                 raise RuntimeError("Cannot find valid samples, check `data/README.md` for the data format.")
 
     return dataset
+
 
 
 def get_dataset(
@@ -247,7 +281,7 @@ def get_dataset(
 
         if data_args.streaming:
             raise ValueError("Turn off `streaming` when saving dataset to disk.")
-
+    
     # Load and preprocess dataset
     with training_args.main_process_first(desc="load dataset"):
         dataset = _get_merged_dataset(data_args.dataset, model_args, data_args, training_args, stage, is_eval=False)
@@ -300,3 +334,91 @@ def get_dataset(
             dataset_module["eval_dataset"] = dataset_dict["validation"]
 
         return dataset_module
+
+
+def _load_modelevaluate_adapter_index(model_path='Meta-Llama-3-8B-Instruct'):
+    import os
+    tokenizer_path = os.path.join(model_path, 'tokenizer.model')
+    
+    adapter_selector = Llama.build(
+            ckpt_dir=model_path,
+            tokenizer_path=tokenizer_path,
+            max_seq_len=8192,
+            max_batch_size=8,
+        )
+
+    return adapter_selector
+
+def evaluate_adapter_index(model,input_question):
+    # Load the prompt
+    system_prompt = """
+            You have two experts available:
+                You have three options:
+
+                1. Expert A: Specializes in scientific concepts and problem-solving across various disciplines.
+
+                2. Expert B: Specializes in basic mathematical reasoning and grade school math word problems.
+
+                0. Neither expert is suitable.
+
+                Please select the option that best fits the situation and output only the corresponding number: 1, 2, or 0.
+
+                Respond with just the number, no additional text or explanation."
+
+                Question:            
+                        """ 
+    import re
+    def extract_first_number(responses):
+        for response in responses:
+            # Try to extract the first number from the content of the first item in the response
+            first_content = response['generation']['content']
+            
+            # Use regular expression to find the first number in the string
+            match = re.search(r'\d+', first_content)
+            
+            return int(match.group(0)) if match else 0
+    
+    dialogs: List[Dialog] = []
+    if isinstance(input_question, list) and len(input_question) > 0:
+        input_question = input_question[0].get('content', '')
+    dialogs.append([
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": input_question},
+            ])
+    selector_result = model.chat_completion(
+                    dialogs,
+                    max_gen_len=None,
+                    temperature=0.6,
+                    top_p=0.9,
+                )
+    index = extract_first_number(selector_result)
+    
+    return index
+
+import torch
+def check_and_print_devices(prompt, index):
+    """
+    打印并检查 prompt 和 index 的设备。
+    如果设备不一致，打印警告信息。
+    """
+    # 获取 prompt 的设备
+    if isinstance(prompt, torch.Tensor):
+        prompt_device = prompt.device
+    else:
+        prompt_device = "CPU"
+
+    # 获取 index 的设备
+    if isinstance(index, torch.Tensor):
+        index_device = index.device
+    else:
+        index_device = "CPU"
+
+    # 打印设备信息
+    print(f"Prompt Device: {prompt_device}")
+    print(f"Index Device: {index_device}")
+
+    # 检查设备是否一致
+    if prompt_device != index_device:
+        print(f"WARNING: Devices are inconsistent! Prompt is on {prompt_device}, but Index is on {index_device}.")
+    else:
+        print("Devices are consistent.")

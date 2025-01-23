@@ -24,7 +24,6 @@ class EvaluationArguments:
     r"""
     Arguments pertaining to specify the evaluation parameters.
     """
-
     task: str = field(
         metadata={"help": "Name of the evaluation task."},
     )

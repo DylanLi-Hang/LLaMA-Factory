@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 from ...extras.logging import get_logger
 from ..data_utils import Role
 from .processor_utils import infer_seqlen
-
+import torch
 
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizer, ProcessorMixin
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from ..mm_plugin import ImageInput, VideoInput
     from ..template import Template
 
-
+from llama import Dialog, Llama
 logger = get_logger(__name__)
 
 
@@ -58,7 +58,6 @@ def _encode_unsupervised_example(
     input_ids = input_ids[:source_len]
     labels = labels[:target_len]
     return input_ids, labels
-
 
 def preprocess_unsupervised_dataset(
     examples: Dict[str, List[Any]],
@@ -91,10 +90,19 @@ def preprocess_unsupervised_dataset(
         model_inputs["labels"].append(labels)
         model_inputs["images"].append(examples["_images"][i])
         model_inputs["videos"].append(examples["_videos"][i])
-
+        if data_args.dynamic_eval:
+            #print(f'Model append adapter index: {examples["_adapter_index"][i]}')
+            #print(f"Adapter Index Device: {examples['_adapter_index'][i].device if isinstance(examples['_adapter_index'][i], torch.Tensor) else 'CPU'}")
+            #print(f"input_ids: {input_ids.device if isinstance(input_ids, torch.Tensor) else 'CPU'}")
+            model_inputs["adapter_indices"].append(
+            examples["_adapter_index"][i]
+        )
     return model_inputs
 
 
 def print_unsupervised_dataset_example(example: Dict[str, List[int]], tokenizer: "PreTrainedTokenizer") -> None:
+    print(f'exmaple: {example}')
     print("input_ids:\n{}".format(example["input_ids"]))
     print("inputs:\n{}".format(tokenizer.decode(example["input_ids"], skip_special_tokens=False)))
+
+

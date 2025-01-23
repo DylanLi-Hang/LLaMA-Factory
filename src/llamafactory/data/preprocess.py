@@ -25,7 +25,6 @@ from .processors.supervised import (
 )
 from .processors.unsupervised import preprocess_unsupervised_dataset, print_unsupervised_dataset_example
 
-
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizer, ProcessorMixin
 
@@ -39,7 +38,7 @@ def get_preprocess_and_print_func(
     template: "Template",
     tokenizer: "PreTrainedTokenizer",
     processor: Optional["ProcessorMixin"],
-    do_generate: bool = False,
+    do_generate: bool = False
 ) -> Tuple[Callable, Callable]:
     if stage == "pt":
         preprocess_func = partial(
@@ -109,3 +108,6 @@ def get_preprocess_and_print_func(
         print_function = partial(print_unsupervised_dataset_example, tokenizer=tokenizer)
 
     return preprocess_func, print_function
+
+
+

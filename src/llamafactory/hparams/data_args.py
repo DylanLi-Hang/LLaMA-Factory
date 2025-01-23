@@ -97,6 +97,11 @@ class DataArguments:
         default=0.0,
         metadata={"help": "Size of the development set, should be an integer or a float in range `[0,1)`."},
     )
+    dynamic_eval: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether or not to evlaue the input with dynamic adpter layers."},
+    )
+
     weight_ratio: Optional[float] = field(
         default=1.0,
         metadata={"help": "Weight ratio to use for training."},

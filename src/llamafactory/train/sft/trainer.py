@@ -138,10 +138,14 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             #     print("Loss per sample (label == 1): No samples")
             # print(f"Loss per sample (label == 0): Mean={loss_per_sample[token_level_dataset_ids == 0].mean().item():.4f}, Std={loss_per_sample[token_level_dataset_ids == 0].std().item():.4f}")
 
-            # Compute custom mean loss
-            custom_mean_loss = weighted_loss_per_sample.sum() / non_ignored.sum()
-            print(f"Custom Mean Loss: {custom_mean_loss.item():.4f}")
-            loss = custom_mean_loss
+            if dataset_ids[dataset_ids == 1].size(0) == 0:
+                #print(f'Warning: No samples found for dataset label 1. Using original loss: {outputs["loss"].item():.4f}')
+                loss = outputs["loss"]
+            else:
+                # Compute custom mean loss
+                custom_mean_loss = weighted_loss_per_sample.sum() / non_ignored.sum()
+                #print(f"Custom Mean Loss: {custom_mean_loss.item():.4f}")
+                loss = custom_mean_loss
         else:
             if self.training_weight_ratio != 1.0:
                 print("Weight Ratio is Set but no labels provided, using original loss")
@@ -202,6 +206,11 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         output_prediction_file = os.path.join(self.args.output_dir, "generated_predictions.jsonl")
         logger.info(f"Saving prediction results to {output_prediction_file}")
 
+        # Count existing lines in the file
+        existing_lines = count_lines_in_file(output_prediction_file)
+        logger.info(f"Existing number of lines in file: {existing_lines}")
+        print(f"Existing number of lines in file: {existing_lines}")
+
         labels = np.where(
             predict_results.label_ids != IGNORE_INDEX, predict_results.label_ids, self.tokenizer.pad_token_id
         )
@@ -218,9 +227,78 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
         decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
 
-        with open(output_prediction_file, "w", encoding="utf-8") as writer:
+        with open(output_prediction_file, "a", encoding="utf-8") as writer:
             res: List[str] = []
             for text, label, pred in zip(decoded_inputs, decoded_labels, decoded_preds):
                 res.append(json.dumps({"prompt": text, "label": label, "predict": pred}, ensure_ascii=False))
+            writer.write("\n".join(res))  # Write new predictions
+            writer.write("\n")  # Add newline to ensure valid JSONL format
 
-            writer.write("\n".join(res))
+        # Count new lines in the file
+        total_lines = count_lines_in_file(output_prediction_file)
+        added_lines = total_lines - existing_lines
+
+        logger.info(f"Number of predictions added: {added_lines}")
+        print(f"Number of predictions added: {added_lines}")
+        logger.info(f"Total number of lines in file after saving: {total_lines}")
+        print(f"Total number of lines in file after saving: {total_lines}")
+
+
+    def print_result(self, dataset: "Dataset", predict_results: "PredictionOutput") -> None:
+        r"""
+        Saves model predictions to `output_dir`.
+
+        A custom behavior that not contained in Seq2SeqTrainer.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        output_prediction_file = os.path.join(self.args.output_dir, "generated_predictions.jsonl")
+        logger.info(f"Saving prediction results to {output_prediction_file}")
+
+        labels = np.where(
+            predict_results.label_ids != IGNORE_INDEX, predict_results.label_ids, self.tokenizer.pad_token_id
+        )
+        preds = np.where(
+            predict_results.predictions != IGNORE_INDEX, predict_results.predictions, self.tokenizer.pad_token_id
+        )
+
+        for i in range(len(preds)):
+            pad_len = np.nonzero(preds[i] != self.tokenizer.pad_token_id)[0]
+            if len(pad_len):  # move pad token to last
+                preds[i] = np.concatenate((preds[i][pad_len[0] :], preds[i][: pad_len[0]]), axis=-1)
+
+        decoded_inputs = self.tokenizer.batch_decode(dataset["input_ids"], skip_special_tokens=True)
+        decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
+        decoded_preds = self.tokenizer.batch_decode(preds, skip_special_tokens=True)
+        for text, label, pred in zip(decoded_inputs, decoded_labels, decoded_preds):
+            print({"prompt": text, "label": label, "predict": pred})
+
+
+def validate_jsonl_file(filepath: str) -> bool:
+    """
+    Validates if the file is a proper JSON Lines (JSONL) file.
+    """
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            for line in f:
+                json.loads(line.strip())  # 验证每行是有效的 JSON 对象
+        return True
+    except json.JSONDecodeError as e:
+        print(f"Invalid JSONL file: {e}")
+        return False
+
+import os
+import json
+import numpy as np
+from typing import List
+
+def count_lines_in_file(filepath: str) -> int:
+    """
+    Counts the number of lines in a JSONL file.
+    """
+    if not os.path.exists(filepath):
+        return 0
+    with open(filepath, "r", encoding="utf-8") as f:
+        return sum(1 for _ in f)
+
